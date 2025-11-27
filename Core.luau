@@ -211,13 +211,10 @@ end
 function TitanCore.PrepareSavePayload(Self : TitanEngine<any>, UserKey : string, Payload : string) : (boolean, any)
 	local PayloadSize : number = #Payload
 
-	-- Case 1: Small enough to save directly
 	if PayloadSize <= MaxDataStoreSize then
 		return true, Payload
 	end
 
-	-- Case 2: Too large, must shard
-	-- We perform the saving of chunks OUTSIDE the UpdateAsync lock to avoid timeouts
 	local ChunkCount : number = math.ceil(PayloadSize / MaxDataStoreSize)
 	local BatchId : string = HttpService:GenerateGUID(false)
 
@@ -226,7 +223,6 @@ function TitanCore.PrepareSavePayload(Self : TitanEngine<any>, UserKey : string,
 		local EndIndex : number = math.min(StartIndex + MaxDataStoreSize - 1, PayloadSize)
 		local ChunkData : string = string.sub(Payload, StartIndex, EndIndex)
 
-		-- Unique key per batch to avoid overwriting active data if save fails mid-way
 		local ChunkKey : string = UserKey .. "_C_" .. BatchId .. "_" .. ChunkIndex
 
 		local Success : boolean = ExecuteRetry(3, function()
@@ -238,7 +234,6 @@ function TitanCore.PrepareSavePayload(Self : TitanEngine<any>, UserKey : string,
 		end
 	end
 
-	-- Return Manifest to be saved in the main key
 	return true, {
 		_IsSharded = true,
 		ChunkCount = ChunkCount,
@@ -254,7 +249,6 @@ function TitanCore.LoadShardedData(Self : TitanEngine<any>, UserKey : string, Da
 		local BatchId : string = Data.BatchId or "" 
 
 		for ChunkIndex : number = 1, ChunkCount do
-			-- Backward compatibility for older sharding keys (without BatchId)
 			local ChunkKey : string = if BatchId ~= "" then UserKey .. "_C_" .. BatchId .. "_" .. ChunkIndex else UserKey .. "_Chunk_" .. ChunkIndex
 
 			local Success : boolean, ChunkData : any = ExecuteRetry(3, function()
@@ -543,9 +537,6 @@ function TitanCore.ExpectData(Self : TitanEngine<any>, UserId : number)
 			local RawData : any = nil
 
 			if OldData and OldData.Data then
-				-- Optimization: Do not load full data here. Return current manifest to maintain lock.
-				-- We deserialize AFTER we get the data back from UpdateAsync
-				-- This prevents "ValueTooLarge" during the UpdateAsync logic itself.
 				return {
 					Data = OldData.Data,
 					Session = NewSessionIdentifier,
@@ -553,7 +544,6 @@ function TitanCore.ExpectData(Self : TitanEngine<any>, UserId : number)
 				} :: any, { UserId }, { ["SessionID"] = NewSessionIdentifier, ["OwnerID"] = tostring(UserId) }
 			end
 
-			-- New User: Create default data
 			if not RawData then
 				RawData = Self.Configuration.Schema:GenerateTemplate()
 				RawData._SchemaVersion = Self.Configuration.SchemaVersion
@@ -576,16 +566,14 @@ function TitanCore.ExpectData(Self : TitanEngine<any>, UserId : number)
 
 	local LoadedData : any = Result.Data
 	if type(LoadedData) == "table" and LoadedData._IsSharded then
-		-- It's a manifest, load chunks now
 		local ReconstructedString : string? = Self:LoadShardedData(UserKey, LoadedData)
 		if ReconstructedString then
 			local Decoded : any, Success : boolean = TitanBinary.Deserialize(Self.Configuration.StoreName, ReconstructedString)
 			LoadedData = Success and Decoded or nil
 		else
-			return nil -- Failed to load chunks
+			return nil
 		end
 	elseif type(LoadedData) == "string" then
-		-- Standard binary string
 		local Decoded : any, Success : boolean = TitanBinary.Deserialize(Self.Configuration.StoreName, LoadedData)
 		LoadedData = Success and Decoded or nil
 	end
@@ -598,7 +586,6 @@ function TitanCore.ExpectData(Self : TitanEngine<any>, UserId : number)
 
 	if MigrationSuccess and DidMigrate then
 		task.spawn(function()
-			-- Migrate immediately
 			local Bin : string = TitanBinary.Serialize(Self.Configuration.StoreName, FinalData)
 			local Success : boolean, Payload : any = Self:PrepareSavePayload(UserKey, Bin)
 
