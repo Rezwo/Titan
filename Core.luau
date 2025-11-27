@@ -14,7 +14,7 @@ local LockTimeoutBase : number = 30
 local AutoSaveSafeLimit : number = 600
 local CircuitBreakerThreshold : number = 5
 local CircuitBreakerResetTime : number = 60
-local MaxDataStoreSize : number = 3800000 -- 3.8MB Safety Limit
+local MaxDataStoreSize : number = 3800000
 
 export type MigrationFunction = (any) -> any
 
