@@ -78,8 +78,24 @@ export type TitanEngine<T> = {
 	GetActiveSessionCount : (TitanEngine<T>) -> number,
 	SetUpdateHook : (TitanEngine<T>, (number, T) -> ()) -> (),
 	SaveShardedData : (TitanEngine<T>, string, string) -> (boolean, any),
-	LoadShardedData : (TitanEngine<T>, string, any) -> string?
+	LoadShardedData : (TitanEngine<T>, string, any) -> string?,
+	RunTransaction : (TitanEngine<T>, { number }, ({ [number] : T }) -> boolean) -> boolean
 }
+
+local function DeepCopy(Table : any) : any
+	if type(Table) ~= "table" then
+		return Table
+	end
+	local Clone : any = {}
+	for Key : any, Value : any in Table do
+		if type(Value) == "table" then
+			Clone[Key] = DeepCopy(Value)
+		else
+			Clone[Key] = Value
+		end
+	end
+	return Clone
+end
 
 local function CheckCircuitBreaker(Engine : TitanEngine<any>) : boolean
 	if Engine.CircuitBreaker.IsOpen then
@@ -739,6 +755,47 @@ function TitanCore.ReleaseData(Self : TitanEngine<any>, UserId : number)
 	Self.DataRegistry[UserKey] = nil
 	Self.UpdateQueue[UserKey] = nil
 	TitanRegistry.ClearUserKey(UserId)
+end
+
+function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number }, Callback : ({ [number] : any }) -> boolean) : boolean
+	local Context : { [number] : any } = {}
+	local MissingUser : boolean = false
+
+	for _, UserId : number in UserIds do
+		local UserKey : string = TitanRegistry.GetUserKey(UserId)
+		local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
+		
+		if not Entry or Entry.Status ~= "Ready" then
+			MissingUser = true
+			break
+		end
+		
+		Context[UserId] = DeepCopy(Entry.Data)
+	end
+
+	if MissingUser then
+		return false
+	end
+
+	local Success : boolean, Result : any = pcall(Callback, Context)
+
+	if Success and Result == true then
+		for _, UserId : number in UserIds do
+			local UserKey : string = TitanRegistry.GetUserKey(UserId)
+			local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
+			
+			if Entry then
+				Entry.Data = Context[UserId]
+				Self:MarkDirty(UserId)
+				if Self.UpdateHook then
+					Self.UpdateHook(UserId, Entry.Data)
+				end
+			end
+		end
+		return true
+	end
+
+	return false
 end
 
 function TitanCore.GetActiveSessionCount(Self : TitanEngine<any>) : number
