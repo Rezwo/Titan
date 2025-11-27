@@ -30,8 +30,7 @@ function TitanGlobalUpdates.AddUpdate(TargetUserId : number, UpdateType : string
 		SenderId = SenderId
 	}
 
-	-- FIX: Added ': any' return type annotation to the callback
-	local Success, Result = pcall(function() 
+	local Success : boolean, Result : any = pcall(function() 
 		return GlobalUpdateStore:UpdateAsync(UserKey, function(CurrentQueue : any) : any
 			local Queue : { GlobalUpdatePayload } = CurrentQueue or {}
 
@@ -67,7 +66,7 @@ function TitanGlobalUpdates.ClearUpdates(TargetUserId : number, ProcessedIds : {
 	local UserKey : string = TitanRegistry.GetUserKey(TargetUserId)
 
 	pcall(function()
-		GlobalUpdateStore:UpdateAsync(UserKey, function(CurrentQueue : any)
+		GlobalUpdateStore:UpdateAsync(UserKey, function(CurrentQueue : any) : any
 			local Queue : { GlobalUpdatePayload } = CurrentQueue or {}
 			local NewQueue : { GlobalUpdatePayload } = {}
 			local IdMap : { [string] : boolean } = {}

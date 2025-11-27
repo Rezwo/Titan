@@ -77,7 +77,7 @@ export type TitanEngine<T> = {
 	CleanupStaleSessions : (TitanEngine<T>) -> (),
 	GetActiveSessionCount : (TitanEngine<T>) -> number,
 	SetUpdateHook : (TitanEngine<T>, (number, T) -> ()) -> (),
-	PrepareSavePayload : (TitanEngine<T>, string, string) -> (boolean, any),
+	SaveShardedData : (TitanEngine<T>, string, string) -> (boolean, any),
 	LoadShardedData : (TitanEngine<T>, string, any) -> string?
 }
 
@@ -208,7 +208,7 @@ function TitanCore.SetUpdateHook(Self : TitanEngine<any>, Callback : (number, an
 	Self.UpdateHook = Callback
 end
 
-function TitanCore.PrepareSavePayload(Self : TitanEngine<any>, UserKey : string, Payload : string) : (boolean, any)
+function TitanCore.SaveShardedData(Self : TitanEngine<any>, UserKey : string, Payload : string) : (boolean, any)
 	local PayloadSize : number = #Payload
 
 	if PayloadSize <= MaxDataStoreSize then

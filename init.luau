@@ -2,12 +2,14 @@
 local TitanCore = require(script.Core)
 local TitanSchema = require(script.Schema)
 local TitanMailbox = require(script.Mailbox)
+local TitanGlobalUpdates = require(script.GlobalUpdates)
 
 local Titan = {}
 
 export type SchemaDefinition = TitanSchema.SchemaDefinition
 export type TitanEngine<T> = TitanCore.TitanEngine<T>
 export type GiftPayload = TitanMailbox.GiftPayload
+export type GlobalUpdatePayload = TitanGlobalUpdates.GlobalUpdatePayload
 
 type Configuration = {
 	StoreName : string,
@@ -44,5 +46,6 @@ Titan.UInt32 = TitanSchema.UInt32
 Titan.Integer = TitanSchema.Integer
 
 Titan.Mailbox = TitanMailbox
+Titan.GlobalUpdates = TitanGlobalUpdates
 
 return Titan
