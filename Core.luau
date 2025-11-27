@@ -230,7 +230,7 @@ function TitanCore.SaveShardedData(Self : TitanEngine<any>, UserKey : string, Pa
 		end, Self)
 
 		if not Success then
-			return false, nil
+			return false, "Chunk Save Failed"
 		end
 	end
 
@@ -587,7 +587,7 @@ function TitanCore.ExpectData(Self : TitanEngine<any>, UserId : number)
 	if MigrationSuccess and DidMigrate then
 		task.spawn(function()
 			local Bin : string = TitanBinary.Serialize(Self.Configuration.StoreName, FinalData)
-			local Success : boolean, Payload : any = Self:PrepareSavePayload(UserKey, Bin)
+			local Success : boolean, Payload : any = Self:SaveShardedData(UserKey, Bin)
 
 			if Success then
 				ExecuteRetry(3, function()
@@ -670,7 +670,7 @@ function TitanCore.PerformAutoSave(Self : TitanEngine<any>)
 
 				local BinaryPayload : string = TitanBinary.Serialize(Self.Configuration.StoreName, Entry.Data)
 
-				local PrepareSuccess : boolean, Payload : any = Self:PrepareSavePayload(UserKey, BinaryPayload)
+				local PrepareSuccess : boolean, Payload : any = Self:SaveShardedData(UserKey, BinaryPayload)
 
 				if not PrepareSuccess then
 					Self.Metrics.FailedSaves += 1
@@ -718,7 +718,7 @@ function TitanCore.ReleaseData(Self : TitanEngine<any>, UserId : number)
 
 	local BinaryPayload : string = TitanBinary.Serialize(Self.Configuration.StoreName, Entry.Data)
 
-	local PrepareSuccess : boolean, Payload : any = Self:PrepareSavePayload(UserKey, BinaryPayload)
+	local PrepareSuccess : boolean, Payload : any = Self:SaveShardedData(UserKey, BinaryPayload)
 
 	if PrepareSuccess then
 		ExecuteRetry(3, function()
