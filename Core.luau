@@ -34,7 +34,8 @@ export type RegistryEntry<T> = {
 	SessionIdentifier : string,
 	LastWriteTime : number,
 	LastAccessTime : number,
-	Status : "Ready" | "Released",
+	-- Added "Locked" status for transactions
+	Status : "Ready" | "Released" | "Locked", 
 	IsDirty : boolean,
 	ConsecutiveFailures : number,
 	IsSharded : boolean
@@ -79,7 +80,7 @@ export type TitanEngine<T> = {
 	SetUpdateHook : (TitanEngine<T>, (number, T) -> ()) -> (),
 	SaveShardedData : (TitanEngine<T>, string, string) -> (boolean, any),
 	LoadShardedData : (TitanEngine<T>, string, any) -> string?,
-	RunTransaction : (TitanEngine<T>, { number }, ({ [number] : T }) -> boolean) -> boolean
+	RunTransaction : (TitanEngine<T>, { number }, ({ [number] : any }) -> boolean) -> boolean
 }
 
 local function DeepCopy(Table : any) : any
@@ -758,23 +759,33 @@ function TitanCore.ReleaseData(Self : TitanEngine<any>, UserId : number)
 end
 
 function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number }, Callback : ({ [number] : any }) -> boolean) : boolean
+	local LockedKeys : { string } = {}
 	local Context : { [number] : any } = {}
-	local MissingUser : boolean = false
 
 	for _, UserId : number in UserIds do
 		local UserKey : string = TitanRegistry.GetUserKey(UserId)
 		local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
-		
+
 		if not Entry or Entry.Status ~= "Ready" then
-			MissingUser = true
-			break
+			for _, LockedKey : string in LockedKeys do
+				local LockedEntry : RegistryEntry<any>? = Self.DataRegistry[LockedKey]
+				if LockedEntry then
+					LockedEntry.Status = "Ready"
+				end
+			end
+			return false
 		end
-		
-		Context[UserId] = DeepCopy(Entry.Data)
+
+		Entry.Status = "Locked"
+		table.insert(LockedKeys, UserKey)
 	end
 
-	if MissingUser then
-		return false
+	for _, UserId : number in UserIds do
+		local UserKey : string = TitanRegistry.GetUserKey(UserId)
+		local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
+		if Entry then
+			Context[UserId] = DeepCopy(Entry.Data)
+		end
 	end
 
 	local Success : boolean, Result : any = pcall(Callback, Context)
@@ -783,9 +794,10 @@ function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number },
 		for _, UserId : number in UserIds do
 			local UserKey : string = TitanRegistry.GetUserKey(UserId)
 			local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
-			
+
 			if Entry then
 				Entry.Data = Context[UserId]
+				Entry.Status = "Ready"
 				Self:MarkDirty(UserId)
 				if Self.UpdateHook then
 					Self.UpdateHook(UserId, Entry.Data)
@@ -793,9 +805,15 @@ function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number },
 			end
 		end
 		return true
+	else
+		for _, UserKey : string in LockedKeys do
+			local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
+			if Entry then
+				Entry.Status = "Ready"
+			end
+		end
+		return false
 	end
-
-	return false
 end
 
 function TitanCore.GetActiveSessionCount(Self : TitanEngine<any>) : number
