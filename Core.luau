@@ -290,7 +290,6 @@ function TitanCore.CleanupStaleSessions(Self : TitanEngine<any>)
 	local CurrentTime : number = os.time()
 
 	for UserKey : string, Entry : RegistryEntry<any> in Self.DataRegistry do
-		-- Clean up loading flags if locked too long
 		if Self.LoadingUsers[UserKey] and (CurrentTime - Self.LoadingUsers[UserKey] > LockTimeoutBase) then
 			Self.LoadingUsers[UserKey] = nil
 		end
@@ -815,6 +814,28 @@ function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number },
 	local Success : boolean, Result : any = pcall(Callback, Context)
 
 	if Success and Result == true then
+		local IsValid : boolean = true
+		for _, UserId : number in UserIds do
+			local NewData : any = Context[UserId]
+			local ValidationResult : any = Self.Configuration.Schema:Validate(NewData)
+			if not ValidationResult.IsValid then
+				IsValid = false
+				warn("Titan Transaction Error: Schema Validation Failed for User", UserId)
+				break
+			end
+			Context[UserId] = ValidationResult.CleanData
+		end
+
+		if not IsValid then
+			for _, UserKey : string in LockedKeys do
+				local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
+				if Entry then
+					Entry.Status = "Ready"
+				end
+			end
+			return false
+		end
+
 		for _, UserId : number in UserIds do
 			local UserKey : string = TitanRegistry.GetUserKey(UserId)
 			local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
