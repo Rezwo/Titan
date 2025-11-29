@@ -34,7 +34,6 @@ export type RegistryEntry<T> = {
 	SessionIdentifier : string,
 	LastWriteTime : number,
 	LastAccessTime : number,
-	-- Added "Locked" status for transactions
 	Status : "Ready" | "Released" | "Locked", 
 	IsDirty : boolean,
 	ConsecutiveFailures : number,
@@ -74,9 +73,11 @@ export type TitanEngine<T> = {
 	GetCachedDataBatch : (TitanEngine<T>, { number }) -> { [number] : CachedDataResult<T> },
 	PerformAutoSave : (TitanEngine<T>) -> (),
 	ReleaseData : (TitanEngine<T>, number) -> (),
+	ForceReleaseLock : (TitanEngine<T>, number) -> (),
 	ApplyMigrations : (TitanEngine<T>, any) -> (boolean, any, boolean),
 	CleanupStaleSessions : (TitanEngine<T>) -> (),
 	GetActiveSessionCount : (TitanEngine<T>) -> number,
+	GetMetrics : (TitanEngine<T>) -> any,
 	SetUpdateHook : (TitanEngine<T>, (number, T) -> ()) -> (),
 	SaveShardedData : (TitanEngine<T>, string, string) -> (boolean, any),
 	LoadShardedData : (TitanEngine<T>, string, any) -> string?,
@@ -289,6 +290,11 @@ function TitanCore.CleanupStaleSessions(Self : TitanEngine<any>)
 	local CurrentTime : number = os.time()
 
 	for UserKey : string, Entry : RegistryEntry<any> in Self.DataRegistry do
+		-- Clean up loading flags if locked too long
+		if Self.LoadingUsers[UserKey] and (CurrentTime - Self.LoadingUsers[UserKey] > LockTimeoutBase) then
+			Self.LoadingUsers[UserKey] = nil
+		end
+
 		if CurrentTime - Entry.LastAccessTime > StaleThreshold then
 			local UserId : number? = tonumber(string.match(UserKey, "User_(%d+)"))
 			if UserId then
@@ -719,7 +725,8 @@ function TitanCore.PerformAutoSave(Self : TitanEngine<any>)
 			end)
 		end
 
-		task.wait(0.1)
+		local WaitTime : number = if #DirtyEntries > 100 then 0.05 else 0.1
+		task.wait(WaitTime)
 	end
 end
 
@@ -728,6 +735,8 @@ function TitanCore.ReleaseData(Self : TitanEngine<any>, UserId : number)
 	local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
 
 	if not Entry then
+		Self.UpdateQueue[UserKey] = nil
+		Self.LoadingUsers[UserKey] = nil
 		return
 	end
 
@@ -755,14 +764,29 @@ function TitanCore.ReleaseData(Self : TitanEngine<any>, UserId : number)
 
 	Self.DataRegistry[UserKey] = nil
 	Self.UpdateQueue[UserKey] = nil
+	Self.LoadingUsers[UserKey] = nil
 	TitanRegistry.ClearUserKey(UserId)
+end
+
+function TitanCore.ForceReleaseLock(Self : TitanEngine<any>, UserId : number)
+	local UserKey : string = TitanRegistry.GetUserKey(UserId)
+	if Self.DataRegistry[UserKey] then
+		warn("Titan: Force releasing lock for user " .. UserId)
+		Self.DataRegistry[UserKey] = nil
+		Self.UpdateQueue[UserKey] = nil
+		Self.LoadingUsers[UserKey] = nil
+		TitanRegistry.ClearUserKey(UserId)
+	end
 end
 
 function TitanCore.RunTransaction(Self : TitanEngine<any>, UserIds : { number }, Callback : ({ [number] : any }) -> boolean) : boolean
 	local LockedKeys : { string } = {}
 	local Context : { [number] : any } = {}
 
-	for _, UserId : number in UserIds do
+	local SortedIds : { number } = table.clone(UserIds)
+	table.sort(SortedIds)
+
+	for _, UserId : number in SortedIds do
 		local UserKey : string = TitanRegistry.GetUserKey(UserId)
 		local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
 
@@ -824,6 +848,25 @@ function TitanCore.GetActiveSessionCount(Self : TitanEngine<any>) : number
 		end
 	end
 	return Count
+end
+
+function TitanCore.GetMetrics(Self : TitanEngine<any>) : any
+	local ActiveSessions : number = Self:GetActiveSessionCount()
+	local QueueSize : number = 0
+	for _ in Self.UpdateQueue do
+		QueueSize += 1
+	end
+
+	return {
+		ActiveSessions = ActiveSessions,
+		UpdateQueueSize = QueueSize,
+		TotalSaves = Self.Metrics.TotalSaves,
+		FailedSaves = Self.Metrics.FailedSaves,
+		TotalLoads = Self.Metrics.TotalLoads,
+		FailedLoads = Self.Metrics.FailedLoads,
+		CircuitBreakerOpen = Self.CircuitBreaker.IsOpen,
+		LastHealthy = Self.Metrics.LastHealthyTime
+	}
 end
 
 return TitanCore

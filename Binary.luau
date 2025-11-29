@@ -5,6 +5,7 @@ local MemoryBufferPool : { buffer } = {}
 local PoolCapacity : number = 50
 local InitialBufferSize : number = 4096
 local BinaryVersion : number = 1
+local MaxReusableBufferSize : number = 1048576 -- 1MB
 
 for BufferIndex : number = 1, PoolCapacity do
 	MemoryBufferPool[BufferIndex] = buffer.create(InitialBufferSize)
@@ -16,11 +17,16 @@ local function AcquireBuffer() : buffer
 end
 
 local function ReleaseBuffer(UsedBuffer : buffer)
+	-- Prevent pool from growing infinitely
 	if #MemoryBufferPool >= PoolCapacity then
 		return
 	end
-	if buffer.len(UsedBuffer) > 1048576 then
-		table.insert(MemoryBufferPool, buffer.create(InitialBufferSize))
+
+	-- If buffer is too large, discard it to save memory, unless pool is empty
+	if buffer.len(UsedBuffer) > MaxReusableBufferSize then
+		if #MemoryBufferPool < (PoolCapacity / 2) then
+			table.insert(MemoryBufferPool, buffer.create(InitialBufferSize))
+		end
 	else
 		table.insert(MemoryBufferPool, UsedBuffer)
 	end
@@ -38,6 +44,8 @@ local function EnsureBufferCapacity(WorkingBuffer : buffer, CursorPosition : num
 
 		local NewBuffer : buffer = buffer.create(NewSize)
 		buffer.copy(NewBuffer, 0, WorkingBuffer, 0, CurrentSize)
+		
+		ReleaseBuffer(WorkingBuffer)
 		return NewBuffer
 	end
 	return WorkingBuffer

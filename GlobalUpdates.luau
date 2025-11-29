@@ -9,6 +9,7 @@ local TitanGlobalUpdates = {}
 local GlobalUpdateStoreName : string = "TitanGlobalUpdates_V1"
 local GlobalUpdateStore = DataStoreService:GetDataStore(GlobalUpdateStoreName)
 local MaxQueueSize : number = 50
+local UpdateTTL : number = 604800 -- 7 Days
 
 export type GlobalUpdatePayload = {
 	UpdateId : string,
@@ -53,7 +54,16 @@ function TitanGlobalUpdates.GetPendingUpdates(TargetUserId : number) : { GlobalU
 	end)
 
 	if Success and Result then
-		return Result
+		local CurrentTime : number = os.time()
+		local ValidUpdates : { GlobalUpdatePayload } = {}
+
+		for _, Update : GlobalUpdatePayload in ipairs(Result) do
+			if (CurrentTime - Update.Created) <= UpdateTTL then
+				table.insert(ValidUpdates, Update)
+			end
+		end
+
+		return ValidUpdates
 	end
 	return {}
 end
@@ -64,6 +74,7 @@ function TitanGlobalUpdates.ClearUpdates(TargetUserId : number, ProcessedIds : {
 	end
 
 	local UserKey : string = TitanRegistry.GetUserKey(TargetUserId)
+	local CurrentTime : number = os.time()
 
 	pcall(function()
 		GlobalUpdateStore:UpdateAsync(UserKey, function(CurrentQueue : any) : any
@@ -76,7 +87,8 @@ function TitanGlobalUpdates.ClearUpdates(TargetUserId : number, ProcessedIds : {
 			end
 
 			for _, Update : GlobalUpdatePayload in Queue do
-				if not IdMap[Update.UpdateId] then
+				local IsExpired : boolean = (CurrentTime - Update.Created) > UpdateTTL
+				if not IdMap[Update.UpdateId] and not IsExpired then
 					table.insert(NewQueue, Update)
 				end
 			end
