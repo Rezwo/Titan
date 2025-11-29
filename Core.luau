@@ -55,11 +55,14 @@ export type TitanEngine<T> = {
 	UpdateQueue : { [string] : boolean? },
 	LoadingUsers : { [string] : number },
 	CircuitBreaker : { IsOpen : boolean, LastFailTime : number, Failures : number },
+	MemoryHealth : { FailureCount : number, WindowStart : number },
 	Metrics : {
 		TotalSaves : number,
 		FailedSaves : number,
 		TotalLoads : number,
 		FailedLoads : number,
+		FailedMemoryWrites : number,
+		FailedMemoryReads : number,
 		LastHealthyTime : number
 	},
 	MemoryWriteSemaphore : number,
@@ -78,6 +81,7 @@ export type TitanEngine<T> = {
 	CleanupStaleSessions : (TitanEngine<T>) -> (),
 	GetActiveSessionCount : (TitanEngine<T>) -> number,
 	GetMetrics : (TitanEngine<T>) -> any,
+	IsMemoryStoreHealthy : (TitanEngine<T>) -> boolean,
 	SetUpdateHook : (TitanEngine<T>, (number, T) -> ()) -> (),
 	SaveShardedData : (TitanEngine<T>, string, string) -> (boolean, any),
 	LoadShardedData : (TitanEngine<T>, string, any) -> string?,
@@ -174,11 +178,14 @@ function TitanCore.New<T>(Configuration : SystemConfiguration) : TitanEngine<T>
 		UpdateQueue = {} :: { [string] : boolean? },
 		LoadingUsers = {} :: { [string] : number },
 		CircuitBreaker = { IsOpen = false, LastFailTime = 0, Failures = 0 },
+		MemoryHealth = { FailureCount = 0, WindowStart = os.time() },
 		Metrics = {
 			TotalSaves = 0,
 			FailedSaves = 0,
 			TotalLoads = 0,
 			FailedLoads = 0,
+			FailedMemoryWrites = 0,
+			FailedMemoryReads = 0,
 			LastHealthyTime = os.time()
 		},
 		MemoryWriteSemaphore = 0,
@@ -224,6 +231,31 @@ end
 
 function TitanCore.SetUpdateHook(Self : TitanEngine<any>, Callback : (number, any) -> ())
 	Self.UpdateHook = Callback
+end
+
+function TitanCore.IsMemoryStoreHealthy(Self : TitanEngine<any>) : boolean
+	local CurrentTime : number = os.time()
+	local WindowDuration : number = 300
+	local FailureThreshold : number = 50
+
+	local WasHealthy : boolean = Self.MemoryHealth.FailureCount < FailureThreshold
+
+	if (CurrentTime - Self.MemoryHealth.WindowStart) > WindowDuration then
+		Self.MemoryHealth.FailureCount = 0
+		Self.MemoryHealth.WindowStart = CurrentTime
+
+		if not WasHealthy then
+			warn("Titan: MemoryStore circuit auto-reset after window expiration")
+		end
+	end
+
+	local IsHealthy : boolean = Self.MemoryHealth.FailureCount < FailureThreshold
+
+	if WasHealthy and not IsHealthy then
+		warn("Titan: MemoryStore circuit OPENED. Failure Count:", Self.MemoryHealth.FailureCount)
+	end
+
+	return IsHealthy
 end
 
 function TitanCore.SaveShardedData(Self : TitanEngine<any>, UserKey : string, Payload : string) : (boolean, any)
@@ -386,6 +418,10 @@ function TitanCore.ProcessUpdateQueue(Self : TitanEngine<any>)
 	local CurrentTime : number = os.time()
 	local CooldownSeconds : number = Self.Configuration.WriteCooldownSeconds
 
+	if not Self:IsMemoryStoreHealthy() then
+		return
+	end
+
 	for UserKey : string, _ : boolean? in Self.UpdateQueue do
 		local Entry : RegistryEntry<any>? = Self.DataRegistry[UserKey]
 
@@ -417,6 +453,12 @@ function TitanCore.ProcessUpdateQueue(Self : TitanEngine<any>)
 						)
 					end, Self)
 
+					if not WriteSuccess then
+						Self.Metrics.FailedMemoryWrites += 1
+						Self.MemoryHealth.FailureCount += 1
+						warn("Titan: MemoryStore write failed for", UserKey)
+					end
+
 					Self.MemoryWriteSemaphore -= 1
 				end)
 			end
@@ -437,7 +479,11 @@ function TitanCore.GetCachedData(Self : TitanEngine<any>, UserId : number) : Cac
 		}
 	end
 
-	local Success : boolean, CachedBinary : any = pcall(function()
+	if not Self:IsMemoryStoreHealthy() then
+		return nil
+	end
+
+	local Success : boolean, CachedBinary : any = ExecuteRetry(2, function()
 		return Self.MemoryCacheStore:GetAsync(UserKey)
 	end)
 
@@ -454,6 +500,9 @@ function TitanCore.GetCachedData(Self : TitanEngine<any>, UserId : number) : Cac
 				}
 			end
 		end
+	elseif not Success then
+		Self.Metrics.FailedMemoryReads += 1
+		Self.MemoryHealth.FailureCount += 1
 	end
 
 	return nil
@@ -885,6 +934,8 @@ function TitanCore.GetMetrics(Self : TitanEngine<any>) : any
 		FailedSaves = Self.Metrics.FailedSaves,
 		TotalLoads = Self.Metrics.TotalLoads,
 		FailedLoads = Self.Metrics.FailedLoads,
+		FailedMemoryWrites = Self.Metrics.FailedMemoryWrites,
+		FailedMemoryReads = Self.Metrics.FailedMemoryReads,
 		CircuitBreakerOpen = Self.CircuitBreaker.IsOpen,
 		LastHealthy = Self.Metrics.LastHealthyTime
 	}
