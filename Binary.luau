@@ -45,7 +45,7 @@ end
 
 type Instruction = {
 	Key : string,
-	DataType : "UInt8" | "UInt16" | "UInt32" | "Float64" | "Boolean" | "String" | "Dictionary",
+	DataType : "UInt8" | "UInt16" | "UInt32" | "Float64" | "Boolean" | "String" | "Dictionary" | "List",
 	Children : { Instruction }?
 }
 
@@ -83,6 +83,10 @@ local function CompileSchemaRecursive(SchemaDefinition : any) : { Instruction }
 		elseif TypeTag == "Dictionary" then
 			NewInstruction.DataType = "Dictionary"
 			NewInstruction.Children = CompileSchemaRecursive(SchemaItem._Structure or SchemaItem._Default)
+		elseif TypeTag == "List" then
+			NewInstruction.DataType = "List"
+			local ContentInstruction : Instruction = CompileSchemaRecursive({ ["_Item"] = SchemaItem._ContentType })[1]
+			NewInstruction.Children = { ContentInstruction }
 		else
 			NewInstruction.DataType = "String"
 		end
@@ -98,6 +102,7 @@ end
 local function CollectInternedStrings(Data : any, InstructionList : { Instruction }, StringMap : { [string] : number }, StringList : { string })
 	for InstructionIndex : number, Item : Instruction in InstructionList do
 		local Value : any = Data[Item.Key]
+
 		if Item.DataType == "String" then
 			local StringValue : string = (type(Value) == "string") and Value or tostring(Value or "")
 			if not StringMap[StringValue] then
@@ -107,11 +112,23 @@ local function CollectInternedStrings(Data : any, InstructionList : { Instructio
 			end
 		elseif Item.DataType == "Dictionary" and Item.Children then
 			CollectInternedStrings(Value or {}, Item.Children, StringMap, StringList)
+		elseif Item.DataType == "List" and Item.Children then
+			local ListTable : { any } = (type(Value) == "table") and Value or {}
+			local ContentType : string = Item.Children[1].DataType
+
+			if ContentType == "String" or ContentType == "Dictionary" or ContentType == "List" then
+				for _, ListItem : any in ipairs(ListTable) do
+					CollectInternedStrings({ ["_Item"] = ListItem }, Item.Children, StringMap, StringList)
+				end
+			end
 		end
 	end
 end
 
-local function PackDataToBuffer(Data : any, InstructionList : { Instruction }, WorkingBuffer : buffer, CursorPosition : number, StringMap : { [string] : number }) : (buffer, number)
+local PackDataToBuffer : (any, { Instruction }, buffer, number, { [string] : number }) -> (buffer, number)
+local UnpackDataFromBuffer : ({ Instruction }, buffer, number, { string }) -> (any, number)
+
+PackDataToBuffer = function(Data : any, InstructionList : { Instruction }, WorkingBuffer : buffer, CursorPosition : number, StringMap : { [string] : number }) : (buffer, number)
 	for InstructionIndex : number, Item : Instruction in InstructionList do
 		local Value : any = Data[Item.Key]
 
@@ -143,12 +160,23 @@ local function PackDataToBuffer(Data : any, InstructionList : { Instruction }, W
 			CursorPosition += 4
 		elseif Item.DataType == "Dictionary" and Item.Children then
 			WorkingBuffer, CursorPosition = PackDataToBuffer(Value or {}, Item.Children, WorkingBuffer, CursorPosition, StringMap)
+		elseif Item.DataType == "List" and Item.Children then
+			local ListTable : { any } = (type(Value) == "table") and Value or {}
+			local Count : number = #ListTable
+
+			WorkingBuffer = EnsureBufferCapacity(WorkingBuffer, CursorPosition, 4)
+			buffer.writeu32(WorkingBuffer, CursorPosition, Count)
+			CursorPosition += 4
+
+			for _, ListItem : any in ipairs(ListTable) do
+				WorkingBuffer, CursorPosition = PackDataToBuffer({ ["_Item"] = ListItem }, Item.Children, WorkingBuffer, CursorPosition, StringMap)
+			end
 		end
 	end
 	return WorkingBuffer, CursorPosition
 end
 
-local function UnpackDataFromBuffer(InstructionList : { Instruction }, WorkingBuffer : buffer, CursorPosition : number, StringList : { string }) : (any, number)
+UnpackDataFromBuffer = function(InstructionList : { Instruction }, WorkingBuffer : buffer, CursorPosition : number, StringList : { string }) : (any, number)
 	local Data : { [string] : any } = {}
 
 	for InstructionIndex : number, Item : Instruction in InstructionList do
@@ -177,6 +205,17 @@ local function UnpackDataFromBuffer(InstructionList : { Instruction }, WorkingBu
 			ChildData, NewCursorPosition = UnpackDataFromBuffer(Item.Children, WorkingBuffer, CursorPosition, StringList)
 			Data[Item.Key] = ChildData
 			CursorPosition = NewCursorPosition
+		elseif Item.DataType == "List" and Item.Children then
+			local Count : number = buffer.readu32(WorkingBuffer, CursorPosition)
+			CursorPosition += 4
+			local ListTable : { any } = {}
+
+			for i : number = 1, Count do
+				local Container : any
+				Container, CursorPosition = UnpackDataFromBuffer(Item.Children, WorkingBuffer, CursorPosition, StringList)
+				table.insert(ListTable, Container["_Item"])
+			end
+			Data[Item.Key] = ListTable
 		end
 	end
 	return Data, CursorPosition
