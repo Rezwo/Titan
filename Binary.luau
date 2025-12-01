@@ -5,7 +5,7 @@ local MemoryBufferPool : { buffer } = {}
 local PoolCapacity : number = 50
 local InitialBufferSize : number = 4096
 local BinaryVersion : number = 1
-local MaxReusableBufferSize : number = 1048576 -- 1MB
+local MaxReusableBufferSize : number = 1048576
 
 for BufferIndex : number = 1, PoolCapacity do
 	MemoryBufferPool[BufferIndex] = buffer.create(InitialBufferSize)
@@ -17,12 +17,10 @@ local function AcquireBuffer() : buffer
 end
 
 local function ReleaseBuffer(UsedBuffer : buffer)
-	-- Prevent pool from growing infinitely
 	if #MemoryBufferPool >= PoolCapacity then
 		return
 	end
 
-	-- If buffer is too large, discard it to save memory, unless pool is empty
 	if buffer.len(UsedBuffer) > MaxReusableBufferSize then
 		if #MemoryBufferPool < (PoolCapacity / 2) then
 			table.insert(MemoryBufferPool, buffer.create(InitialBufferSize))
@@ -218,7 +216,7 @@ UnpackDataFromBuffer = function(InstructionList : { Instruction }, WorkingBuffer
 			CursorPosition += 4
 			local ListTable : { any } = {}
 
-			for i : number = 1, Count do
+			for Index : number = 1, Count do
 				local Container : any
 				Container, CursorPosition = UnpackDataFromBuffer(Item.Children, WorkingBuffer, CursorPosition, StringList)
 				table.insert(ListTable, Container["_Item"])
