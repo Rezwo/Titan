@@ -1,29 +1,22 @@
 --!strict
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
 
 local TitanMailbox = {}
 
 local MailboxDataStoreName : string = "TitanMailbox_Production"
 local MaxInboxSize : number = 50
 local CooldownSeconds : number = 1
-local CooldownCleanupInterval : number = 60
 local MaxItemNameLength : number = 50
 local MaxQuantity : number = 999999
 
 local MailboxDataStore = DataStoreService:GetDataStore(MailboxDataStoreName)
-local LastSendTime : { [number] : number } = {}
 
-task.spawn(function()
-	while true do
-		task.wait(CooldownCleanupInterval)
-		local Now : number = os.time()
-		for UserId : number, Timestamp : number in LastSendTime do
-			if Now - Timestamp > CooldownCleanupInterval then
-				LastSendTime[UserId] = nil
-			end
-		end
-	end
+local LastSendTimestamp : { [number] : number } = {}
+
+Players.PlayerRemoving:Connect(function(Player : Player)
+	LastSendTimestamp[Player.UserId] = nil
 end)
 
 export type GiftPayload = {
@@ -62,10 +55,14 @@ function TitanMailbox.SendGift(FromUserId : number, ToUserId : number, ItemName 
 	end
 
 	local Now : number = os.time()
-	if LastSendTime[FromUserId] and (Now - LastSendTime[FromUserId]) < CooldownSeconds then
+	local LastTime : number = LastSendTimestamp[FromUserId] or 0
+
+	if (Now - LastTime) < CooldownSeconds then
 		return false, "Cooldown active"
 	end
-	LastSendTime[FromUserId] = Now
+
+	-- Update the timestamp to Now
+	LastSendTimestamp[FromUserId] = Now
 
 	local Payload : GiftPayload = {
 		TransactionId = HttpService:GenerateGUID(false),
