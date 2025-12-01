@@ -9,7 +9,7 @@ local TitanGlobalUpdates = {}
 local GlobalUpdateStoreName : string = "TitanGlobalUpdates_V1"
 local GlobalUpdateStore = DataStoreService:GetDataStore(GlobalUpdateStoreName)
 local MaxQueueSize : number = 50
-local UpdateTTL : number = 604800 -- 7 Days
+local UpdateTTL : number = 604800
 
 export type GlobalUpdatePayload = {
 	UpdateId : string,
