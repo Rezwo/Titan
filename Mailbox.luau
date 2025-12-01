@@ -61,7 +61,6 @@ function TitanMailbox.SendGift(FromUserId : number, ToUserId : number, ItemName 
 		return false, "Cooldown active"
 	end
 
-	-- Update the timestamp to Now
 	LastSendTimestamp[FromUserId] = Now
 
 	local Payload : GiftPayload = {
